@@ -11,10 +11,6 @@ struct ClipRow {
     id: i64,
     #[tabled(rename = "Preview")]
     preview: String,
-    #[tabled(rename = "Type")]
-    content_type: String,
-    #[tabled(rename = "Size")]
-    size: String,
     #[tabled(rename = "Label")]
     label: String,
     #[tabled(rename = "Created")]
@@ -52,8 +48,6 @@ fn entry_to_row(e: &ClipEntry) -> ClipRow {
     ClipRow {
         id: e.id,
         preview: truncate(&e.content, 60),
-        content_type: e.content_type.to_string(),
-        size: format_size(e.byte_size),
         label: e.label.clone().unwrap_or_default(),
         created_at: format_timestamp(&e.created_at),
     }
