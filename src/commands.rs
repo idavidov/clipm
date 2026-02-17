@@ -88,9 +88,9 @@ pub fn get(id: Option<i64>) -> Result<(), ClipmError> {
     Ok(())
 }
 
-pub fn list(limit: usize, offset: usize) -> Result<(), ClipmError> {
+pub fn list(limit: usize, offset: usize, label: Option<&str>) -> Result<(), ClipmError> {
     let conn = db::open()?;
-    let entries = db::list(&conn, limit, offset)?;
+    let entries = db::list(&conn, limit, offset, label)?;
     if entries.is_empty() {
         println!("No entries in clipboard history.");
         return Ok(());
