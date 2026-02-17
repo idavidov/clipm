@@ -39,6 +39,7 @@ Show clipboard history as a table.
 clipm list
 clipm list -l 10          # show 10 entries
 clipm list -l 10 -o 20    # show 10 entries, skip first 20
+clipm list -L "meeting"   # show only entries with label "meeting"
 ```
 
 ### Search

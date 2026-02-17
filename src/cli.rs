@@ -28,6 +28,9 @@ pub enum Command {
         /// Number of entries to skip
         #[arg(short, long, default_value = "0")]
         offset: usize,
+        /// Filter by label
+        #[arg(short = 'L', long)]
+        label: Option<String>,
     },
     /// Full-text search clipboard history
     Search {

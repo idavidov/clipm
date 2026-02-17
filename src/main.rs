@@ -12,7 +12,7 @@ fn main() {
     let result = match cli.command {
         Command::Store { label } => commands::store(label),
         Command::Get { id } => commands::get(id),
-        Command::List { limit, offset } => commands::list(limit, offset),
+        Command::List { limit, offset, label } => commands::list(limit, offset, label.as_deref()),
         Command::Search { query, limit } => commands::search(&query, limit),
         Command::Label { id, label } => commands::label(id, label),
         Command::Delete { id } => commands::delete(id),

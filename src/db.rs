@@ -127,12 +127,22 @@ pub fn get_most_recent(conn: &Connection) -> Result<ClipEntry, ClipmError> {
     ).map_err(|_| ClipmError::NotFound("No entries in history".into()))
 }
 
-pub fn list(conn: &Connection, limit: usize, offset: usize) -> Result<Vec<ClipEntry>, ClipmError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, content, content_type, byte_size, created_at, label
-         FROM clips ORDER BY id DESC LIMIT ?1 OFFSET ?2"
-    )?;
-    let entries = stmt.query_map(params![limit as i64, offset as i64], |row| {
+pub fn list(conn: &Connection, limit: usize, offset: usize, label: Option<&str>) -> Result<Vec<ClipEntry>, ClipmError> {
+    let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match label {
+        Some(l) => (
+            "SELECT id, content, content_type, byte_size, created_at, label
+             FROM clips WHERE label = ?1 ORDER BY id DESC LIMIT ?2 OFFSET ?3".into(),
+            vec![Box::new(l.to_string()), Box::new(limit as i64), Box::new(offset as i64)],
+        ),
+        None => (
+            "SELECT id, content, content_type, byte_size, created_at, label
+             FROM clips ORDER BY id DESC LIMIT ?1 OFFSET ?2".into(),
+            vec![Box::new(limit as i64), Box::new(offset as i64)],
+        ),
+    };
+    let mut stmt = conn.prepare(&sql)?;
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+    let entries = stmt.query_map(params_refs.as_slice(), |row| {
         Ok(ClipEntry {
             id: row.get(0)?,
             content: row.get(1)?,
