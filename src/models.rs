@@ -37,6 +37,7 @@ pub enum ClipmError {
     Database(String),
     Io(String),
     NotFound(String),
+    InvalidInput(String),
     EmptyClipboard,
 }
 
@@ -47,6 +48,7 @@ impl fmt::Display for ClipmError {
             ClipmError::Database(msg) => write!(f, "Database error: {msg}"),
             ClipmError::Io(msg) => write!(f, "I/O error: {msg}"),
             ClipmError::NotFound(msg) => write!(f, "Not found: {msg}"),
+            ClipmError::InvalidInput(msg) => write!(f, "Invalid input: {msg}"),
             ClipmError::EmptyClipboard => write!(f, "Clipboard is empty"),
         }
     }
@@ -93,6 +95,10 @@ mod tests {
         assert_eq!(
             ClipmError::NotFound("no entry".into()).to_string(),
             "Not found: no entry"
+        );
+        assert_eq!(
+            ClipmError::InvalidInput("bad".into()).to_string(),
+            "Invalid input: bad"
         );
     }
 }
