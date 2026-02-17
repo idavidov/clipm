@@ -139,45 +139,59 @@ pub fn get_most_recent(conn: &Connection) -> Result<ClipEntry, ClipmError> {
     })
 }
 
-pub fn list(conn: &Connection, limit: usize, offset: usize, label: Option<&str>) -> Result<Vec<ClipEntry>, ClipmError> {
-    let entries = match label {
-        Some(l) => {
-            let mut stmt = conn.prepare(
-                "SELECT id, content, content_type, byte_size, created_at, label
-                 FROM clips WHERE label = ?1 ORDER BY id DESC LIMIT ?2 OFFSET ?3"
-            )?;
-            let rows = stmt.query_map(params![l, limit as i64, offset as i64], row_to_entry)?
-                .collect::<Result<Vec<_>, _>>()?;
-            rows
-        }
-        None => {
-            let mut stmt = conn.prepare(
-                "SELECT id, content, content_type, byte_size, created_at, label
-                 FROM clips ORDER BY id DESC LIMIT ?1 OFFSET ?2"
-            )?;
-            let rows = stmt.query_map(params![limit as i64, offset as i64], row_to_entry)?
-                .collect::<Result<Vec<_>, _>>()?;
-            rows
-        }
-    };
+pub fn list(conn: &Connection, limit: usize, offset: usize, label: Option<&str>, days: Option<u32>) -> Result<Vec<ClipEntry>, ClipmError> {
+    let mut sql = "SELECT id, content, content_type, byte_size, created_at, label FROM clips WHERE 1=1".to_string();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    if let Some(l) = label {
+        sql.push_str(" AND label = ?");
+        params.push(Box::new(l.to_string()));
+    }
+
+    if let Some(d) = days {
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(d as i64);
+        let cutoff_str = cutoff.to_rfc3339();
+        sql.push_str(" AND created_at >= ?");
+        params.push(Box::new(cutoff_str));
+    }
+
+    sql.push_str(" ORDER BY id DESC LIMIT ? OFFSET ?");
+    params.push(Box::new(limit as i64));
+    params.push(Box::new(offset as i64));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let entries = stmt.query_map(param_refs.as_slice(), row_to_entry)?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(entries)
 }
 
-pub fn search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<ClipEntry>, ClipmError> {
+pub fn search(conn: &Connection, query: &str, limit: usize, days: Option<u32>) -> Result<Vec<ClipEntry>, ClipmError> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return Err(ClipmError::InvalidInput("Empty search query".into()));
     }
     let escaped = trimmed.replace('"', "\"\"");
-    let mut stmt = conn.prepare(
-        "SELECT c.id, c.content, c.content_type, c.byte_size, c.created_at, c.label
+
+    let mut sql = "SELECT c.id, c.content, c.content_type, c.byte_size, c.created_at, c.label
          FROM clips_fts f
          JOIN clips c ON c.id = f.rowid
-         WHERE clips_fts MATCH ?1
-         ORDER BY bm25(clips_fts)
-         LIMIT ?2"
-    )?;
-    let entries = stmt.query_map(params![escaped, limit as i64], row_to_entry)?
+         WHERE clips_fts MATCH ?1".to_string();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(escaped)];
+
+    if let Some(d) = days {
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(d as i64);
+        let cutoff_str = cutoff.to_rfc3339();
+        sql.push_str(" AND c.created_at >= ?");
+        params.push(Box::new(cutoff_str));
+    }
+
+    sql.push_str(" ORDER BY bm25(clips_fts) LIMIT ?");
+    params.push(Box::new(limit as i64));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let entries = stmt.query_map(param_refs.as_slice(), row_to_entry)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(entries)
 }
@@ -213,6 +227,17 @@ mod tests {
             content_type: ContentType::Text,
             byte_size: content.len(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
+            label: None,
+        }
+    }
+
+    fn sample_entry_at(content: &str, created_at: &str) -> ClipEntry {
+        ClipEntry {
+            id: 0,
+            content: content.to_string(),
+            content_type: ContentType::Text,
+            byte_size: content.len(),
+            created_at: created_at.to_string(),
             label: None,
         }
     }
@@ -282,7 +307,7 @@ mod tests {
         for i in 0..5 {
             insert(&conn, &sample_entry(&format!("entry {i}"))).unwrap();
         }
-        let entries = list(&conn, 3, 0, None).unwrap();
+        let entries = list(&conn, 3, 0, None, None).unwrap();
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].content, "entry 4");
     }
@@ -293,7 +318,7 @@ mod tests {
         for i in 0..5 {
             insert(&conn, &sample_entry(&format!("entry {i}"))).unwrap();
         }
-        let entries = list(&conn, 2, 2, None).unwrap();
+        let entries = list(&conn, 2, 2, None, None).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].content, "entry 2");
     }
@@ -306,7 +331,7 @@ mod tests {
         insert(&conn, &labeled).unwrap();
         insert(&conn, &sample_entry("unlabeled")).unwrap();
 
-        let entries = list(&conn, 10, 0, Some("important")).unwrap();
+        let entries = list(&conn, 10, 0, Some("important"), None).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].content, "labeled");
     }
@@ -351,7 +376,7 @@ mod tests {
         insert(&conn, &sample_entry("two")).unwrap();
         let count = clear(&conn).unwrap();
         assert_eq!(count, 2);
-        let entries = list(&conn, 10, 0, None).unwrap();
+        let entries = list(&conn, 10, 0, None, None).unwrap();
         assert!(entries.is_empty());
     }
 
@@ -367,7 +392,7 @@ mod tests {
         let conn = test_conn();
         insert(&conn, &sample_entry("hello world")).unwrap();
         insert(&conn, &sample_entry("goodbye world")).unwrap();
-        let results = search(&conn, "hello", 10).unwrap();
+        let results = search(&conn, "hello", 10, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].content, "hello world");
     }
@@ -376,7 +401,7 @@ mod tests {
     fn test_search_no_results() {
         let conn = test_conn();
         insert(&conn, &sample_entry("hello world")).unwrap();
-        let results = search(&conn, "nonexistent", 10).unwrap();
+        let results = search(&conn, "nonexistent", 10, None).unwrap();
         assert!(results.is_empty());
     }
 
@@ -384,14 +409,14 @@ mod tests {
     fn test_search_special_chars() {
         let conn = test_conn();
         insert(&conn, &sample_entry("hello \"world\"")).unwrap();
-        let results = search(&conn, "hello", 10).unwrap();
+        let results = search(&conn, "hello", 10, None).unwrap();
         assert_eq!(results.len(), 1);
     }
 
     #[test]
     fn test_search_empty_query() {
         let conn = test_conn();
-        let err = search(&conn, "   ", 10).unwrap_err();
+        let err = search(&conn, "   ", 10, None).unwrap_err();
         assert!(matches!(err, ClipmError::InvalidInput(_)));
     }
 
@@ -402,5 +427,64 @@ mod tests {
         migrate(&conn).unwrap();
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn test_list_with_days_filter() {
+        let conn = test_conn();
+        let now = chrono::Utc::now();
+        let three_days_ago = now - chrono::Duration::days(3);
+        let thirty_days_ago = now - chrono::Duration::days(30);
+
+        insert(&conn, &sample_entry_at("today", &now.to_rfc3339())).unwrap();
+        insert(&conn, &sample_entry_at("three days ago", &three_days_ago.to_rfc3339())).unwrap();
+        insert(&conn, &sample_entry_at("thirty days ago", &thirty_days_ago.to_rfc3339())).unwrap();
+
+        let entries = list(&conn, 10, 0, None, Some(7)).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].content, "three days ago");
+        assert_eq!(entries[1].content, "today");
+    }
+
+    #[test]
+    fn test_list_with_days_and_label() {
+        let conn = test_conn();
+        let now = chrono::Utc::now();
+        let ten_days_ago = now - chrono::Duration::days(10);
+
+        let mut recent_labeled = sample_entry_at("recent labeled", &now.to_rfc3339());
+        recent_labeled.label = Some("important".to_string());
+        insert(&conn, &recent_labeled).unwrap();
+
+        let mut old_labeled = sample_entry_at("old labeled", &ten_days_ago.to_rfc3339());
+        old_labeled.label = Some("important".to_string());
+        insert(&conn, &old_labeled).unwrap();
+
+        let mut recent_unlabeled = sample_entry_at("recent unlabeled", &now.to_rfc3339());
+        recent_unlabeled.label = None;
+        insert(&conn, &recent_unlabeled).unwrap();
+
+        let entries = list(&conn, 10, 0, Some("important"), Some(7)).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content, "recent labeled");
+    }
+
+    #[test]
+    fn test_search_with_days_filter() {
+        let conn = test_conn();
+        let now = chrono::Utc::now();
+        let five_days_ago = now - chrono::Duration::days(5);
+        let twenty_days_ago = now - chrono::Duration::days(20);
+
+        insert(&conn, &sample_entry_at("hello recent", &now.to_rfc3339())).unwrap();
+        insert(&conn, &sample_entry_at("hello five", &five_days_ago.to_rfc3339())).unwrap();
+        insert(&conn, &sample_entry_at("hello old", &twenty_days_ago.to_rfc3339())).unwrap();
+
+        let results = search(&conn, "hello", 10, Some(10)).unwrap();
+        assert_eq!(results.len(), 2);
+        let contents: Vec<String> = results.iter().map(|e| e.content.clone()).collect();
+        assert!(contents.contains(&"hello recent".to_string()));
+        assert!(contents.contains(&"hello five".to_string()));
+        assert!(!contents.contains(&"hello old".to_string()));
     }
 }
