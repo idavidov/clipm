@@ -73,6 +73,22 @@ clipm clear       # prompts for confirmation
 clipm clear -f    # skip confirmation
 ```
 
+## Development
+
+### Build
+
+```bash
+cargo build --release
+```
+
+### Run tests
+
+```bash
+cargo test
+```
+
+Tests cover the database layer (CRUD, search, migration), utility functions (truncation, size formatting, timestamp formatting), and model parsing.
+
 ## Storage
 
 History is stored at `~/Library/Application Support/clipm/history.db`.

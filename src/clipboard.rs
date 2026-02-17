@@ -2,10 +2,8 @@ use arboard::Clipboard;
 use crate::models::ClipmError;
 
 pub fn read_text() -> Result<String, ClipmError> {
-    let mut cb = Clipboard::new()
-        .map_err(|e| ClipmError::Clipboard(e.to_string()))?;
-    let text = cb.get_text()
-        .map_err(|e| ClipmError::Clipboard(e.to_string()))?;
+    let mut cb = Clipboard::new()?;
+    let text = cb.get_text()?;
     if text.is_empty() {
         return Err(ClipmError::EmptyClipboard);
     }
@@ -13,9 +11,7 @@ pub fn read_text() -> Result<String, ClipmError> {
 }
 
 pub fn write_text(text: &str) -> Result<(), ClipmError> {
-    let mut cb = Clipboard::new()
-        .map_err(|e| ClipmError::Clipboard(e.to_string()))?;
-    cb.set_text(text)
-        .map_err(|e| ClipmError::Clipboard(e.to_string()))?;
+    let mut cb = Clipboard::new()?;
+    cb.set_text(text)?;
     Ok(())
 }

@@ -2,6 +2,8 @@
 name = "clipm"
 version = "0.1.0"
 edition = "2021"
+description = "A CLI clipboard manager for macOS"
+license = "MIT"
 
 [dependencies]
 arboard = "3.6"
