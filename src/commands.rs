@@ -45,27 +45,42 @@ fn format_timestamp(rfc3339: &str) -> String {
 }
 
 fn entry_to_row(e: &ClipEntry) -> ClipRow {
+    let preview = if e.content_type == ContentType::Password {
+        "********".to_string()
+    } else {
+        truncate(&e.content, 60)
+    };
     ClipRow {
         id: e.id,
-        preview: truncate(&e.content, 60),
+        preview,
         label: e.label.clone().unwrap_or_default(),
         created_at: format_timestamp(&e.created_at),
     }
 }
 
-pub fn store(label: Option<String>) -> Result<(), ClipmError> {
+pub fn store(label: Option<String>, content_type_str: &str) -> Result<(), ClipmError> {
     let content = clipboard::read_text()?;
     let conn = db::open()?;
 
-    if db::is_duplicate(&conn, &content)? {
+    let content_type = content_type_str.parse::<ContentType>()
+        .map_err(ClipmError::InvalidInput)?;
+
+    // Skip duplicate check for passwords
+    if content_type != ContentType::Password && db::is_duplicate(&conn, &content)? {
         println!("Skipped: content matches most recent entry.");
         return Ok(());
     }
 
+    // Auto-label as "password" if no label given for password type
+    let label = match (label, &content_type) {
+        (None, ContentType::Password) => Some("password".to_string()),
+        (l, _) => l,
+    };
+
     let entry = ClipEntry {
         id: 0,
         byte_size: content.len(),
-        content_type: ContentType::Text,
+        content_type,
         created_at: chrono::Utc::now().to_rfc3339(),
         label,
         content,
@@ -93,9 +108,9 @@ pub fn get(id: Option<i64>) -> Result<(), ClipmError> {
     Ok(())
 }
 
-pub fn list(limit: usize, offset: usize, label: Option<&str>, days: Option<u32>) -> Result<(), ClipmError> {
+pub fn list(limit: usize, offset: usize, label: Option<&str>, days: Option<u32>, content_type: Option<&str>) -> Result<(), ClipmError> {
     let conn = db::open()?;
-    let entries = db::list(&conn, limit, offset, label, days)?;
+    let entries = db::list(&conn, limit, offset, label, days, content_type)?;
     if entries.is_empty() {
         println!("No entries in clipboard history.");
         return Ok(());
@@ -115,9 +130,9 @@ pub fn label(id: i64, label: Option<String>) -> Result<(), ClipmError> {
     Ok(())
 }
 
-pub fn search(query: &str, limit: usize, days: Option<u32>) -> Result<(), ClipmError> {
+pub fn search(query: &str, limit: usize, days: Option<u32>, content_type: Option<&str>) -> Result<(), ClipmError> {
     let conn = db::open()?;
-    let entries = db::search(&conn, query, limit, days)?;
+    let entries = db::search(&conn, query, limit, days, content_type)?;
     if entries.is_empty() {
         println!("No results for \"{query}\".");
         return Ok(());
@@ -217,5 +232,30 @@ mod tests {
     fn test_format_timestamp_invalid_falls_back() {
         let ts = "not-a-timestamp";
         assert_eq!(format_timestamp(ts), "not-a-timestamp");
+    }
+
+    #[test]
+    fn test_entry_to_row_masks_password() {
+        let text_entry = ClipEntry {
+            id: 1,
+            content: "hello world".to_string(),
+            content_type: ContentType::Text,
+            byte_size: 11,
+            created_at: "2026-02-17T10:00:00Z".to_string(),
+            label: None,
+        };
+        let row = entry_to_row(&text_entry);
+        assert_eq!(row.preview, "hello world");
+
+        let password_entry = ClipEntry {
+            id: 2,
+            content: "my-secret-password".to_string(),
+            content_type: ContentType::Password,
+            byte_size: 18,
+            created_at: "2026-02-17T10:00:00Z".to_string(),
+            label: None,
+        };
+        let row = entry_to_row(&password_entry);
+        assert_eq!(row.preview, "********");
     }
 }

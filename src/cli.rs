@@ -14,6 +14,9 @@ pub enum Command {
         /// Optional label for the entry
         #[arg(short, long)]
         label: Option<String>,
+        /// Content type: text or password
+        #[arg(short = 't', long = "type", default_value = "text")]
+        content_type: String,
     },
     /// Copy entry to clipboard (default: most recent)
     Get {
@@ -34,6 +37,9 @@ pub enum Command {
         /// Filter to entries from the last N days
         #[arg(short, long)]
         days: Option<u32>,
+        /// Filter by content type: text or password
+        #[arg(short = 't', long = "type")]
+        content_type: Option<String>,
     },
     /// Full-text search clipboard history
     Search {
@@ -45,6 +51,9 @@ pub enum Command {
         /// Filter to entries from the last N days
         #[arg(short, long)]
         days: Option<u32>,
+        /// Filter by content type: text or password
+        #[arg(short = 't', long = "type")]
+        content_type: Option<String>,
     },
     /// Add or update a label on an existing entry
     Label {

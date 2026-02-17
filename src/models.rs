@@ -1,23 +1,29 @@
 use std::fmt;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ContentType {
     Text,
+    Password,
 }
 
 impl fmt::Display for ContentType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ContentType::Text => write!(f, "text"),
+            ContentType::Password => write!(f, "password"),
         }
     }
 }
 
 impl std::str::FromStr for ContentType {
-    type Err = std::convert::Infallible;
+    type Err = String;
 
-    fn from_str(_s: &str) -> Result<Self, Self::Err> {
-        Ok(ContentType::Text)
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "text" => Ok(ContentType::Text),
+            "password" => Ok(ContentType::Password),
+            _ => Err(format!("Invalid content type: {s}. Must be 'text' or 'password'.")),
+        }
     }
 }
 
@@ -81,12 +87,21 @@ mod tests {
     #[test]
     fn test_content_type_display() {
         assert_eq!(ContentType::Text.to_string(), "text");
+        assert_eq!(ContentType::Password.to_string(), "password");
     }
 
     #[test]
     fn test_content_type_from_str() {
         assert!(matches!("text".parse::<ContentType>(), Ok(ContentType::Text)));
-        assert!(matches!("unknown".parse::<ContentType>(), Ok(ContentType::Text)));
+        assert!(matches!("password".parse::<ContentType>(), Ok(ContentType::Password)));
+        assert!("unknown".parse::<ContentType>().is_err());
+    }
+
+    #[test]
+    fn test_content_type_partial_eq() {
+        assert_eq!(ContentType::Text, ContentType::Text);
+        assert_eq!(ContentType::Password, ContentType::Password);
+        assert_ne!(ContentType::Text, ContentType::Password);
     }
 
     #[test]
