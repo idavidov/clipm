@@ -21,12 +21,14 @@ struct ClipRow {
     created_at: String,
 }
 
-fn truncate(s: &str, max_len: usize) -> String {
+fn truncate(s: &str, max_chars: usize) -> String {
     let single_line: String = s.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
-    if single_line.len() <= max_len {
+    let char_count = single_line.chars().count();
+    if char_count <= max_chars {
         single_line
     } else {
-        format!("{}…", &single_line[..max_len - 1])
+        let truncated: String = single_line.chars().take(max_chars - 1).collect();
+        format!("{truncated}…")
     }
 }
 
@@ -40,6 +42,12 @@ fn format_size(bytes: usize) -> String {
     }
 }
 
+fn format_timestamp(rfc3339: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(rfc3339)
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|_| rfc3339.to_string())
+}
+
 fn entry_to_row(e: &ClipEntry) -> ClipRow {
     ClipRow {
         id: e.id,
@@ -47,7 +55,7 @@ fn entry_to_row(e: &ClipEntry) -> ClipRow {
         content_type: e.content_type.to_string(),
         size: format_size(e.byte_size),
         label: e.label.clone().unwrap_or_default(),
-        created_at: e.created_at.clone(),
+        created_at: format_timestamp(&e.created_at),
     }
 }
 
@@ -69,7 +77,10 @@ pub fn store(label: Option<String>) -> Result<(), ClipmError> {
         content,
     };
     let id = db::insert(&conn, &entry)?;
-    println!("Stored as entry #{id} ({}).", format_size(entry.byte_size));
+    match &entry.label {
+        Some(l) => println!("Stored as entry #{id} ({}, label: \"{l}\").", format_size(entry.byte_size)),
+        None => println!("Stored as entry #{id} ({}).", format_size(entry.byte_size)),
+    }
     Ok(())
 }
 
@@ -132,9 +143,9 @@ pub fn delete(id: i64) -> Result<(), ClipmError> {
 pub fn clear(force: bool) -> Result<(), ClipmError> {
     if !force {
         print!("Delete all clipboard history? [y/N] ");
-        io::stdout().flush().unwrap();
+        io::stdout().flush()?;
         let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
+        io::stdin().read_line(&mut input)?;
         if !input.trim().eq_ignore_ascii_case("y") {
             println!("Aborted.");
             return Ok(());
@@ -144,4 +155,73 @@ pub fn clear(force: bool) -> Result<(), ClipmError> {
     let count = db::clear(&conn)?;
     println!("Cleared {count} entries.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_short_string() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_exact_length() {
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_long_string() {
+        assert_eq!(truncate("hello world", 8), "hello w…");
+    }
+
+    #[test]
+    fn test_truncate_newlines_replaced() {
+        assert_eq!(truncate("hello\nworld", 20), "hello world");
+    }
+
+    #[test]
+    fn test_truncate_unicode() {
+        assert_eq!(truncate("日本語テスト", 4), "日本語…");
+    }
+
+    #[test]
+    fn test_truncate_emoji() {
+        assert_eq!(truncate("😀😁😂🤣😃", 3), "😀😁…");
+    }
+
+    #[test]
+    fn test_format_size_bytes() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(500), "500 B");
+        assert_eq!(format_size(1023), "1023 B");
+    }
+
+    #[test]
+    fn test_format_size_kb() {
+        assert_eq!(format_size(1024), "1.0 KB");
+        assert_eq!(format_size(2048), "2.0 KB");
+    }
+
+    #[test]
+    fn test_format_size_mb() {
+        assert_eq!(format_size(1024 * 1024), "1.0 MB");
+        assert_eq!(format_size(2 * 1024 * 1024), "2.0 MB");
+    }
+
+    #[test]
+    fn test_format_timestamp_valid() {
+        let ts = "2026-02-17T10:30:00+00:00";
+        let result = format_timestamp(ts);
+        assert!(result.contains("2026"));
+        assert!(result.contains("02"));
+        assert!(!result.contains("+00:00"));
+    }
+
+    #[test]
+    fn test_format_timestamp_invalid_falls_back() {
+        let ts = "not-a-timestamp";
+        assert_eq!(format_timestamp(ts), "not-a-timestamp");
+    }
 }
