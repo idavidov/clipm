@@ -1,7 +1,7 @@
 # CLI Clipboard Manager for macOS (`clipm`)
 
 ## Context
-Create a new CLI clipboard manager in Rust from scratch in the empty `/Users/idavidov/Code/claudecli` directory. The tool saves clipboard snapshots on demand (no background daemon), stores them in SQLite with full-text search, and lets users list/search/retrieve history.
+Create a new CLI clipboard manager in Rust from scratch in the empty `/Users/username/Code/claudecli` directory. The tool saves clipboard snapshots on demand (no background daemon), stores them in SQLite with full-text search, and lets users list/search/retrieve history.
 
 ## CLI Commands
 | Command | Description |
