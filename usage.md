@@ -50,6 +50,15 @@ clipm search "meeting"
 clipm search "TODO" -l 5
 ```
 
+### Label an entry
+
+Add, update, or remove a label on an existing entry.
+
+```bash
+clipm label 3 "important"    # set label
+clipm label 3                # remove label
+```
+
 ### Delete an entry
 
 ```bash
