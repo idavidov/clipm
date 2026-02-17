@@ -1,0 +1,12 @@
+[package]
+name = "clipm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arboard = "3.6"
+clap = { version = "4.5", features = ["derive"] }
+rusqlite = { version = "0.38", features = ["bundled"] }
+chrono = "0.4"
+dirs = "6"
+tabled = "0.17"
