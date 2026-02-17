@@ -99,6 +99,17 @@ pub fn get_by_id(conn: &Connection, id: i64) -> Result<ClipEntry, ClipmError> {
     ).map_err(|_| ClipmError::NotFound(format!("No entry with id {id}")))
 }
 
+pub fn update_label(conn: &Connection, id: i64, label: Option<&str>) -> Result<(), ClipmError> {
+    let changed = conn.execute(
+        "UPDATE clips SET label = ?1 WHERE id = ?2",
+        params![label, id],
+    )?;
+    if changed == 0 {
+        return Err(ClipmError::NotFound(format!("No entry with id {id}")));
+    }
+    Ok(())
+}
+
 pub fn get_most_recent(conn: &Connection) -> Result<ClipEntry, ClipmError> {
     conn.query_row(
         "SELECT id, content, content_type, byte_size, created_at, label FROM clips ORDER BY id DESC LIMIT 1",

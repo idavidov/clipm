@@ -37,6 +37,13 @@ pub enum Command {
         #[arg(short, long, default_value = "20")]
         limit: usize,
     },
+    /// Add or update a label on an existing entry
+    Label {
+        /// Entry ID
+        id: i64,
+        /// Label text (omit to remove label)
+        label: Option<String>,
+    },
     /// Delete a single entry
     Delete {
         /// Entry ID to delete

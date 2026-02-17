@@ -100,6 +100,16 @@ pub fn list(limit: usize, offset: usize) -> Result<(), ClipmError> {
     Ok(())
 }
 
+pub fn label(id: i64, label: Option<String>) -> Result<(), ClipmError> {
+    let conn = db::open()?;
+    db::update_label(&conn, id, label.as_deref())?;
+    match &label {
+        Some(l) => println!("Entry #{id} labeled \"{l}\"."),
+        None => println!("Label removed from entry #{id}."),
+    }
+    Ok(())
+}
+
 pub fn search(query: &str, limit: usize) -> Result<(), ClipmError> {
     let conn = db::open()?;
     let entries = db::search(&conn, query, limit)?;

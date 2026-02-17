@@ -14,6 +14,7 @@ fn main() {
         Command::Get { id } => commands::get(id),
         Command::List { limit, offset } => commands::list(limit, offset),
         Command::Search { query, limit } => commands::search(&query, limit),
+        Command::Label { id, label } => commands::label(id, label),
         Command::Delete { id } => commands::delete(id),
         Command::Clear { force } => commands::clear(force),
     };
