@@ -27,57 +27,118 @@ pub fn open() -> Result<Connection, ClipmError> {
 
 fn migrate(conn: &Connection) -> Result<(), ClipmError> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 1 {
-        return Ok(());
+
+    if version < 1 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS clips (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                content     TEXT NOT NULL,
+                content_type TEXT NOT NULL DEFAULT 'text',
+                byte_size   INTEGER NOT NULL,
+                created_at  TEXT NOT NULL,
+                label       TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_clips_label ON clips(label);
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS clips_fts USING fts5(
+                content,
+                label,
+                content='clips',
+                content_rowid='id'
+            );
+
+            -- Sync triggers
+            CREATE TRIGGER IF NOT EXISTS clips_ai AFTER INSERT ON clips BEGIN
+                INSERT INTO clips_fts(rowid, content, label)
+                VALUES (new.id, new.content, new.label);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS clips_ad AFTER DELETE ON clips BEGIN
+                INSERT INTO clips_fts(clips_fts, rowid, content, label)
+                VALUES ('delete', old.id, old.content, old.label);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS clips_au AFTER UPDATE ON clips BEGIN
+                INSERT INTO clips_fts(clips_fts, rowid, content, label)
+                VALUES ('delete', old.id, old.content, old.label);
+                INSERT INTO clips_fts(rowid, content, label)
+                VALUES (new.id, new.content, new.label);
+            END;
+
+            PRAGMA user_version = 1;"
+        )?;
     }
 
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS clips (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            content     TEXT NOT NULL,
-            content_type TEXT NOT NULL DEFAULT 'text',
-            byte_size   INTEGER NOT NULL,
-            created_at  TEXT NOT NULL,
-            label       TEXT
-        );
+    if version < 2 {
+        conn.execute_batch(
+            "-- Drop old triggers
+            DROP TRIGGER IF EXISTS clips_ai;
+            DROP TRIGGER IF EXISTS clips_ad;
+            DROP TRIGGER IF EXISTS clips_au;
 
-        CREATE INDEX IF NOT EXISTS idx_clips_label ON clips(label);
+            -- Recreate triggers with password masking
+            CREATE TRIGGER clips_ai AFTER INSERT ON clips BEGIN
+                INSERT INTO clips_fts(rowid, content, label)
+                VALUES (
+                    new.id,
+                    CASE WHEN new.content_type = 'password' THEN '' ELSE new.content END,
+                    new.label
+                );
+            END;
 
-        CREATE VIRTUAL TABLE IF NOT EXISTS clips_fts USING fts5(
-            content,
-            label,
-            content='clips',
-            content_rowid='id'
-        );
+            CREATE TRIGGER clips_ad AFTER DELETE ON clips BEGIN
+                INSERT INTO clips_fts(clips_fts, rowid, content, label)
+                VALUES (
+                    'delete',
+                    old.id,
+                    CASE WHEN old.content_type = 'password' THEN '' ELSE old.content END,
+                    old.label
+                );
+            END;
 
-        -- Sync triggers
-        CREATE TRIGGER IF NOT EXISTS clips_ai AFTER INSERT ON clips BEGIN
-            INSERT INTO clips_fts(rowid, content, label)
-            VALUES (new.id, new.content, new.label);
-        END;
+            CREATE TRIGGER clips_au AFTER UPDATE ON clips BEGIN
+                INSERT INTO clips_fts(clips_fts, rowid, content, label)
+                VALUES (
+                    'delete',
+                    old.id,
+                    CASE WHEN old.content_type = 'password' THEN '' ELSE old.content END,
+                    old.label
+                );
+                INSERT INTO clips_fts(rowid, content, label)
+                VALUES (
+                    new.id,
+                    CASE WHEN new.content_type = 'password' THEN '' ELSE new.content END,
+                    new.label
+                );
+            END;
 
-        CREATE TRIGGER IF NOT EXISTS clips_ad AFTER DELETE ON clips BEGIN
-            INSERT INTO clips_fts(clips_fts, rowid, content, label)
-            VALUES ('delete', old.id, old.content, old.label);
-        END;
+            -- Rebuild FTS index
+            INSERT INTO clips_fts(clips_fts) VALUES('rebuild');
 
-        CREATE TRIGGER IF NOT EXISTS clips_au AFTER UPDATE ON clips BEGIN
-            INSERT INTO clips_fts(clips_fts, rowid, content, label)
-            VALUES ('delete', old.id, old.content, old.label);
-            INSERT INTO clips_fts(rowid, content, label)
-            VALUES (new.id, new.content, new.label);
-        END;
+            -- Add index on content_type
+            CREATE INDEX IF NOT EXISTS idx_clips_content_type ON clips(content_type);
 
-        PRAGMA user_version = 1;"
-    )?;
+            PRAGMA user_version = 2;"
+        )?;
+    }
+
     Ok(())
 }
 
 fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<ClipEntry> {
+    let content_type_str: String = row.get(2)?;
+    let content_type = content_type_str.parse::<ContentType>().map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            2,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+        )
+    })?;
     Ok(ClipEntry {
         id: row.get(0)?,
         content: row.get(1)?,
-        content_type: row.get::<_, String>(2)?.parse::<ContentType>().unwrap(),
+        content_type,
         byte_size: row.get::<_, i64>(3)? as usize,
         created_at: row.get(4)?,
         label: row.get(5)?,
@@ -139,7 +200,7 @@ pub fn get_most_recent(conn: &Connection) -> Result<ClipEntry, ClipmError> {
     })
 }
 
-pub fn list(conn: &Connection, limit: usize, offset: usize, label: Option<&str>, days: Option<u32>) -> Result<Vec<ClipEntry>, ClipmError> {
+pub fn list(conn: &Connection, limit: usize, offset: usize, label: Option<&str>, days: Option<u32>, content_type: Option<&str>) -> Result<Vec<ClipEntry>, ClipmError> {
     let mut sql = "SELECT id, content, content_type, byte_size, created_at, label FROM clips WHERE 1=1".to_string();
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -155,6 +216,11 @@ pub fn list(conn: &Connection, limit: usize, offset: usize, label: Option<&str>,
         params.push(Box::new(cutoff_str));
     }
 
+    if let Some(ct) = content_type {
+        sql.push_str(" AND content_type = ?");
+        params.push(Box::new(ct.to_string()));
+    }
+
     sql.push_str(" ORDER BY id DESC LIMIT ? OFFSET ?");
     params.push(Box::new(limit as i64));
     params.push(Box::new(offset as i64));
@@ -166,7 +232,7 @@ pub fn list(conn: &Connection, limit: usize, offset: usize, label: Option<&str>,
     Ok(entries)
 }
 
-pub fn search(conn: &Connection, query: &str, limit: usize, days: Option<u32>) -> Result<Vec<ClipEntry>, ClipmError> {
+pub fn search(conn: &Connection, query: &str, limit: usize, days: Option<u32>, content_type: Option<&str>) -> Result<Vec<ClipEntry>, ClipmError> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return Err(ClipmError::InvalidInput("Empty search query".into()));
@@ -184,6 +250,11 @@ pub fn search(conn: &Connection, query: &str, limit: usize, days: Option<u32>) -
         let cutoff_str = cutoff.to_rfc3339();
         sql.push_str(" AND c.created_at >= ?");
         params.push(Box::new(cutoff_str));
+    }
+
+    if let Some(ct) = content_type {
+        sql.push_str(" AND c.content_type = ?");
+        params.push(Box::new(ct.to_string()));
     }
 
     sql.push_str(" ORDER BY bm25(clips_fts) LIMIT ?");
@@ -307,7 +378,7 @@ mod tests {
         for i in 0..5 {
             insert(&conn, &sample_entry(&format!("entry {i}"))).unwrap();
         }
-        let entries = list(&conn, 3, 0, None, None).unwrap();
+        let entries = list(&conn, 3, 0, None, None, None).unwrap();
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].content, "entry 4");
     }
@@ -318,7 +389,7 @@ mod tests {
         for i in 0..5 {
             insert(&conn, &sample_entry(&format!("entry {i}"))).unwrap();
         }
-        let entries = list(&conn, 2, 2, None, None).unwrap();
+        let entries = list(&conn, 2, 2, None, None, None).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].content, "entry 2");
     }
@@ -331,7 +402,7 @@ mod tests {
         insert(&conn, &labeled).unwrap();
         insert(&conn, &sample_entry("unlabeled")).unwrap();
 
-        let entries = list(&conn, 10, 0, Some("important"), None).unwrap();
+        let entries = list(&conn, 10, 0, Some("important"), None, None).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].content, "labeled");
     }
@@ -376,7 +447,7 @@ mod tests {
         insert(&conn, &sample_entry("two")).unwrap();
         let count = clear(&conn).unwrap();
         assert_eq!(count, 2);
-        let entries = list(&conn, 10, 0, None, None).unwrap();
+        let entries = list(&conn, 10, 0, None, None, None).unwrap();
         assert!(entries.is_empty());
     }
 
@@ -392,7 +463,7 @@ mod tests {
         let conn = test_conn();
         insert(&conn, &sample_entry("hello world")).unwrap();
         insert(&conn, &sample_entry("goodbye world")).unwrap();
-        let results = search(&conn, "hello", 10, None).unwrap();
+        let results = search(&conn, "hello", 10, None, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].content, "hello world");
     }
@@ -401,7 +472,7 @@ mod tests {
     fn test_search_no_results() {
         let conn = test_conn();
         insert(&conn, &sample_entry("hello world")).unwrap();
-        let results = search(&conn, "nonexistent", 10, None).unwrap();
+        let results = search(&conn, "nonexistent", 10, None, None).unwrap();
         assert!(results.is_empty());
     }
 
@@ -409,14 +480,14 @@ mod tests {
     fn test_search_special_chars() {
         let conn = test_conn();
         insert(&conn, &sample_entry("hello \"world\"")).unwrap();
-        let results = search(&conn, "hello", 10, None).unwrap();
+        let results = search(&conn, "hello", 10, None, None).unwrap();
         assert_eq!(results.len(), 1);
     }
 
     #[test]
     fn test_search_empty_query() {
         let conn = test_conn();
-        let err = search(&conn, "   ", 10, None).unwrap_err();
+        let err = search(&conn, "   ", 10, None, None).unwrap_err();
         assert!(matches!(err, ClipmError::InvalidInput(_)));
     }
 
@@ -426,7 +497,7 @@ mod tests {
         migrate(&conn).unwrap();
         migrate(&conn).unwrap();
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
     }
 
     #[test]
@@ -440,7 +511,7 @@ mod tests {
         insert(&conn, &sample_entry_at("three days ago", &three_days_ago.to_rfc3339())).unwrap();
         insert(&conn, &sample_entry_at("thirty days ago", &thirty_days_ago.to_rfc3339())).unwrap();
 
-        let entries = list(&conn, 10, 0, None, Some(7)).unwrap();
+        let entries = list(&conn, 10, 0, None, Some(7), None).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].content, "three days ago");
         assert_eq!(entries[1].content, "today");
@@ -464,7 +535,7 @@ mod tests {
         recent_unlabeled.label = None;
         insert(&conn, &recent_unlabeled).unwrap();
 
-        let entries = list(&conn, 10, 0, Some("important"), Some(7)).unwrap();
+        let entries = list(&conn, 10, 0, Some("important"), Some(7), None).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].content, "recent labeled");
     }
@@ -480,11 +551,82 @@ mod tests {
         insert(&conn, &sample_entry_at("hello five", &five_days_ago.to_rfc3339())).unwrap();
         insert(&conn, &sample_entry_at("hello old", &twenty_days_ago.to_rfc3339())).unwrap();
 
-        let results = search(&conn, "hello", 10, Some(10)).unwrap();
+        let results = search(&conn, "hello", 10, Some(10), None).unwrap();
         assert_eq!(results.len(), 2);
         let contents: Vec<String> = results.iter().map(|e| e.content.clone()).collect();
         assert!(contents.contains(&"hello recent".to_string()));
         assert!(contents.contains(&"hello five".to_string()));
         assert!(!contents.contains(&"hello old".to_string()));
+    }
+
+    #[test]
+    fn test_insert_password_entry() {
+        let conn = test_conn();
+        let mut entry = sample_entry("my-secret-password");
+        entry.content_type = ContentType::Password;
+        let id = insert(&conn, &entry).unwrap();
+        let fetched = get_by_id(&conn, id).unwrap();
+        assert_eq!(fetched.content, "my-secret-password");
+        assert_eq!(fetched.content_type, ContentType::Password);
+    }
+
+    #[test]
+    fn test_password_not_in_fts() {
+        let conn = test_conn();
+        let mut entry = sample_entry("my-secret-password");
+        entry.content_type = ContentType::Password;
+        insert(&conn, &entry).unwrap();
+        let results = search(&conn, "secret", 10, None, None).unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_password_label_in_fts() {
+        let conn = test_conn();
+        let mut entry = sample_entry("my-secret-password");
+        entry.content_type = ContentType::Password;
+        entry.label = Some("github-token".to_string());
+        insert(&conn, &entry).unwrap();
+        let results = search(&conn, "github", 10, None, None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].content, "my-secret-password");
+    }
+
+    #[test]
+    fn test_list_filter_by_content_type() {
+        let conn = test_conn();
+        insert(&conn, &sample_entry("text content")).unwrap();
+        let mut pass_entry = sample_entry("password123");
+        pass_entry.content_type = ContentType::Password;
+        insert(&conn, &pass_entry).unwrap();
+
+        let text_entries = list(&conn, 10, 0, None, None, Some("text")).unwrap();
+        assert_eq!(text_entries.len(), 1);
+        assert_eq!(text_entries[0].content, "text content");
+
+        let pass_entries = list(&conn, 10, 0, None, None, Some("password")).unwrap();
+        assert_eq!(pass_entries.len(), 1);
+        assert_eq!(pass_entries[0].content, "password123");
+    }
+
+    #[test]
+    fn test_search_filter_by_content_type() {
+        let conn = test_conn();
+        let mut text_entry = sample_entry("hello world");
+        text_entry.label = Some("greeting".to_string());
+        insert(&conn, &text_entry).unwrap();
+
+        let mut pass_entry = sample_entry("secret123");
+        pass_entry.content_type = ContentType::Password;
+        pass_entry.label = Some("greeting".to_string());
+        insert(&conn, &pass_entry).unwrap();
+
+        let text_results = search(&conn, "greeting", 10, None, Some("text")).unwrap();
+        assert_eq!(text_results.len(), 1);
+        assert_eq!(text_results[0].content, "hello world");
+
+        let pass_results = search(&conn, "greeting", 10, None, Some("password")).unwrap();
+        assert_eq!(pass_results.len(), 1);
+        assert_eq!(pass_results[0].content, "secret123");
     }
 }

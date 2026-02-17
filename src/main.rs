@@ -10,10 +10,14 @@ use cli::{Cli, Command};
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Store { label } => commands::store(label),
+        Command::Store { label, content_type } => commands::store(label, &content_type),
         Command::Get { id } => commands::get(id),
-        Command::List { limit, offset, label, days } => commands::list(limit, offset, label.as_deref(), days),
-        Command::Search { query, limit, days } => commands::search(&query, limit, days),
+        Command::List { limit, offset, label, days, content_type } => {
+            commands::list(limit, offset, label.as_deref(), days, content_type.as_deref())
+        }
+        Command::Search { query, limit, days, content_type } => {
+            commands::search(&query, limit, days, content_type.as_deref())
+        }
         Command::Label { id, label } => commands::label(id, label),
         Command::Delete { id } => commands::delete(id),
         Command::Clear { force } => commands::clear(force),
