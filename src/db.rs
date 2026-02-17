@@ -15,7 +15,12 @@ fn db_path() -> Result<PathBuf, ClipmError> {
 pub fn open() -> Result<Connection, ClipmError> {
     let path = db_path()?;
     let conn = Connection::open(path)?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA foreign_keys=ON;
+         PRAGMA busy_timeout=5000;
+         PRAGMA synchronous=NORMAL;"
+    )?;
     migrate(&conn)?;
     Ok(conn)
 }
@@ -106,7 +111,10 @@ pub fn get_by_id(conn: &Connection, id: i64) -> Result<ClipEntry, ClipmError> {
         "SELECT id, content, content_type, byte_size, created_at, label FROM clips WHERE id = ?1",
         params![id],
         row_to_entry,
-    ).map_err(|_| ClipmError::NotFound(format!("No entry with id {id}")))
+    ).map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => ClipmError::NotFound(format!("No entry with id {id}")),
+        other => ClipmError::Database(other.to_string()),
+    })
 }
 
 pub fn update_label(conn: &Connection, id: i64, label: Option<&str>) -> Result<(), ClipmError> {
@@ -125,7 +133,10 @@ pub fn get_most_recent(conn: &Connection) -> Result<ClipEntry, ClipmError> {
         "SELECT id, content, content_type, byte_size, created_at, label FROM clips ORDER BY id DESC LIMIT 1",
         [],
         row_to_entry,
-    ).map_err(|_| ClipmError::NotFound("No entries in history".into()))
+    ).map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => ClipmError::NotFound("No entries in history".into()),
+        other => ClipmError::Database(other.to_string()),
+    })
 }
 
 pub fn list(conn: &Connection, limit: usize, offset: usize, label: Option<&str>) -> Result<Vec<ClipEntry>, ClipmError> {
@@ -153,13 +164,17 @@ pub fn list(conn: &Connection, limit: usize, offset: usize, label: Option<&str>)
 }
 
 pub fn search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<ClipEntry>, ClipmError> {
-    let escaped = format!("\"{}\"", query.replace('"', "\"\""));
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Err(ClipmError::InvalidInput("Empty search query".into()));
+    }
+    let escaped = trimmed.replace('"', "\"\"");
     let mut stmt = conn.prepare(
         "SELECT c.id, c.content, c.content_type, c.byte_size, c.created_at, c.label
          FROM clips_fts f
          JOIN clips c ON c.id = f.rowid
          WHERE clips_fts MATCH ?1
-         ORDER BY rank
+         ORDER BY bm25(clips_fts)
          LIMIT ?2"
     )?;
     let entries = stmt.query_map(params![escaped, limit as i64], row_to_entry)?
@@ -225,6 +240,22 @@ mod tests {
     fn test_get_most_recent_empty() {
         let conn = test_conn();
         assert!(get_most_recent(&conn).is_err());
+    }
+
+    #[test]
+    fn test_get_by_id_db_error_not_masked() {
+        let conn = test_conn();
+        conn.execute_batch("DROP TABLE clips;").unwrap();
+        let err = get_by_id(&conn, 1).unwrap_err();
+        assert!(matches!(err, ClipmError::Database(_)));
+    }
+
+    #[test]
+    fn test_get_most_recent_db_error_not_masked() {
+        let conn = test_conn();
+        conn.execute_batch("DROP TABLE clips;").unwrap();
+        let err = get_most_recent(&conn).unwrap_err();
+        assert!(matches!(err, ClipmError::Database(_)));
     }
 
     #[test]
@@ -355,6 +386,13 @@ mod tests {
         insert(&conn, &sample_entry("hello \"world\"")).unwrap();
         let results = search(&conn, "hello", 10).unwrap();
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_search_empty_query() {
+        let conn = test_conn();
+        let err = search(&conn, "   ", 10).unwrap_err();
+        assert!(matches!(err, ClipmError::InvalidInput(_)));
     }
 
     #[test]
