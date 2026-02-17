@@ -31,6 +31,9 @@ pub enum Command {
         /// Filter by label
         #[arg(short = 'L', long)]
         label: Option<String>,
+        /// Filter to entries from the last N days
+        #[arg(short, long)]
+        days: Option<u32>,
     },
     /// Full-text search clipboard history
     Search {
@@ -39,6 +42,9 @@ pub enum Command {
         /// Maximum number of results
         #[arg(short, long, default_value = "20")]
         limit: usize,
+        /// Filter to entries from the last N days
+        #[arg(short, long)]
+        days: Option<u32>,
     },
     /// Add or update a label on an existing entry
     Label {

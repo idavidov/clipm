@@ -93,9 +93,9 @@ pub fn get(id: Option<i64>) -> Result<(), ClipmError> {
     Ok(())
 }
 
-pub fn list(limit: usize, offset: usize, label: Option<&str>) -> Result<(), ClipmError> {
+pub fn list(limit: usize, offset: usize, label: Option<&str>, days: Option<u32>) -> Result<(), ClipmError> {
     let conn = db::open()?;
-    let entries = db::list(&conn, limit, offset, label)?;
+    let entries = db::list(&conn, limit, offset, label, days)?;
     if entries.is_empty() {
         println!("No entries in clipboard history.");
         return Ok(());
@@ -115,9 +115,9 @@ pub fn label(id: i64, label: Option<String>) -> Result<(), ClipmError> {
     Ok(())
 }
 
-pub fn search(query: &str, limit: usize) -> Result<(), ClipmError> {
+pub fn search(query: &str, limit: usize, days: Option<u32>) -> Result<(), ClipmError> {
     let conn = db::open()?;
-    let entries = db::search(&conn, query, limit)?;
+    let entries = db::search(&conn, query, limit, days)?;
     if entries.is_empty() {
         println!("No results for \"{query}\".");
         return Ok(());
